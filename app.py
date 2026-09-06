@@ -1,12 +1,20 @@
 import os
 import sys
-import time
+import threading
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
+from fastapi import FastAPI
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from playwright.sync_api import sync_playwright
 
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 NAUKRI_URL = "https://www.naukri.com/"
 PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
@@ -23,20 +31,43 @@ NEW_HEADLINE = (
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 
 BASE_DIR = Path(__file__).resolve().parent
+
 RESUME_PATH = BASE_DIR / "Anuroop_gowda_c_resume.pdf"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+IST = ZoneInfo("Asia/Kolkata")
 
-def send_telegram(message):
-    """
-    Send notification to Telegram.
-    If Telegram configuration is missing, simply skip notification.
-    """
+
+# ============================================================
+# FASTAPI
+# ============================================================
+
+app = FastAPI(
+    title="Naukri Profile Automation"
+)
+
+
+# ============================================================
+# STATE
+# ============================================================
+
+automation_lock = threading.Lock()
+
+last_run_status = "NOT_RUN"
+last_run_time = None
+last_run_error = None
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
+
+def send_telegram(message: str):
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram notification is not configured.")
+        print("Telegram is not configured.")
         return
 
     url = (
@@ -50,10 +81,11 @@ def send_telegram(message):
     }
 
     try:
+
         response = requests.post(
             url,
             json=payload,
-            timeout=15,
+            timeout=15
         )
 
         response.raise_for_status()
@@ -61,8 +93,15 @@ def send_telegram(message):
         print("Telegram notification sent.")
 
     except Exception as exc:
-        print(f"Telegram notification failed: {exc}")
 
+        print(
+            f"Telegram notification failed: {exc}"
+        )
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
 
 def validate_configuration():
 
@@ -81,9 +120,13 @@ def validate_configuration():
             f"Resume file not found: {RESUME_PATH}"
         )
 
-    file_size_mb = RESUME_PATH.stat().st_size / (1024 * 1024)
+    file_size_mb = (
+        RESUME_PATH.stat().st_size
+        / (1024 * 1024)
+    )
 
     if file_size_mb > 2:
+
         raise RuntimeError(
             f"Resume is {file_size_mb:.2f} MB. "
             "Naukri allows maximum 2 MB."
@@ -91,6 +134,10 @@ def validate_configuration():
 
     print("Configuration validated.")
 
+
+# ============================================================
+# BROWSER
+# ============================================================
 
 def create_browser(playwright):
 
@@ -105,6 +152,10 @@ def create_browser(playwright):
     return browser, page
 
 
+# ============================================================
+# LOGIN
+# ============================================================
+
 def login(page):
 
     print("Opening Naukri...")
@@ -114,16 +165,20 @@ def login(page):
         wait_until="domcontentloaded"
     )
 
+    page.wait_for_timeout(3000)
+
     print("Current URL:", page.url)
     print("Page title:", page.title())
 
-    page.screenshot(
-        path="naukri_login_debug.png",
-        full_page=True
-    )
+    # Check whether Naukri returned an access-denied page
+    body_text = page.locator("body").inner_text()
 
-    print("Page HTML:")
-    print(page.locator("body").inner_text()[:5000])
+    if "Access Denied" in body_text:
+
+        raise RuntimeError(
+            "Naukri returned 'Access Denied'. "
+            "The current network/IP may be blocked."
+        )
 
     print("Clicking Login...")
 
@@ -151,15 +206,20 @@ def login(page):
 
     page.wait_for_timeout(5000)
 
-    print("Current URL:", page.url)
+    print("Current URL after login:", page.url)
 
     if "login" in page.url.lower():
+
         raise RuntimeError(
             "Naukri login appears to have failed."
         )
 
     print("Logged in successfully.")
 
+
+# ============================================================
+# PROFILE
+# ============================================================
 
 def open_profile(page):
 
@@ -172,8 +232,15 @@ def open_profile(page):
 
     page.wait_for_timeout(3000)
 
-    print("Profile URL:", page.url)
+    print(
+        "Profile URL:",
+        page.url
+    )
 
+
+# ============================================================
+# UPDATE HEADLINE
+# ============================================================
 
 def update_resume_headline(page):
 
@@ -188,7 +255,6 @@ def update_resume_headline(page):
         timeout=15000
     )
 
-    # Find edit button inside headline section
     edit_button = headline_section.locator(
         "button, [role='button'], [class*='edit']"
     ).first
@@ -201,7 +267,9 @@ def update_resume_headline(page):
         "textarea:visible"
     ).last
 
-    textarea.fill(NEW_HEADLINE)
+    textarea.fill(
+        NEW_HEADLINE
+    )
 
     save_button = page.get_by_role(
         "button",
@@ -222,8 +290,14 @@ def update_resume_headline(page):
             "Headline update could not be verified."
         )
 
-    print("Headline updated successfully.")
+    print(
+        "Headline updated successfully."
+    )
 
+
+# ============================================================
+# RESUME UPLOAD
+# ============================================================
 
 def upload_resume(page):
 
@@ -238,7 +312,9 @@ def upload_resume(page):
         timeout=15000
     )
 
-    print("Selecting resume file...")
+    print(
+        "Selecting resume file..."
+    )
 
     resume_file_input.set_input_files(
         str(RESUME_PATH)
@@ -253,7 +329,9 @@ def upload_resume(page):
         timeout=10000
     )
 
-    print("Clicking Update resume...")
+    print(
+        "Clicking Update resume..."
+    )
 
     update_resume_button.click()
 
@@ -268,7 +346,9 @@ def upload_resume(page):
         timeout=15000
     )
 
-    print("Resume filename verified.")
+    print(
+        "Resume filename verified."
+    )
 
     uploaded_date = page.locator(
         ".cvPreview .updateOn"
@@ -283,93 +363,204 @@ def upload_resume(page):
             date_text
         )
 
-    print("Resume uploaded successfully.")
+    print(
+        "Resume uploaded successfully."
+    )
 
+
+# ============================================================
+# ACTUAL AUTOMATION
+# ============================================================
 
 def run_automation():
 
-    validate_configuration()
+    global last_run_status
+    global last_run_time
+    global last_run_error
 
-    with sync_playwright() as playwright:
+    # Prevent two automation runs at the same time
+    if not automation_lock.acquire(
+        blocking=False
+    ):
 
-        browser = None
+        print(
+            "Automation is already running."
+        )
 
-        try:
-
-            browser, page = create_browser(
-                playwright
-            )
-
-            login(page)
-
-            open_profile(page)
-
-            update_resume_headline(page)
-
-            upload_resume(page)
-
-            return True
-
-        finally:
-
-            if browser:
-
-                browser.close()
-
-
-def main():
-
-    started_at = datetime.now()
+        return
 
     try:
+
+        started_at = datetime.now(IST)
+
+        last_run_status = "RUNNING"
+        last_run_time = started_at
+        last_run_error = None
 
         print("=" * 60)
         print("NAUKRI AUTOMATION STARTED")
         print("=" * 60)
 
-        run_automation()
+        validate_configuration()
 
-        finished_at = datetime.now()
+        with sync_playwright() as playwright:
 
-        message = (
-            "🤖 Naukri Automation\n\n"
-            "✅ SUCCESS\n\n"
-            "Resume: Updated\n"
-            "Headline: Updated\n"
-            f"Started: {started_at.strftime('%d %b %Y %I:%M %p')}\n"
-            f"Finished: {finished_at.strftime('%d %b %Y %I:%M %p')}"
-        )
+            browser = None
 
-        print(message)
+            try:
 
-        send_telegram(message)
+                browser, page = create_browser(
+                    playwright
+                )
+
+                login(page)
+
+                open_profile(page)
+
+                update_resume_headline(page)
+
+                upload_resume(page)
+
+            finally:
+
+                if browser:
+
+                    browser.close()
+
+        finished_at = datetime.now(IST)
+
+        last_run_status = "SUCCESS"
 
         print("=" * 60)
         print("AUTOMATION COMPLETED SUCCESSFULLY")
         print("=" * 60)
 
+        message = (
+            "🤖 Naukri Automation\n\n"
+            "✅ SUCCESS\n\n"
+            "Resume: Updated\n"
+            "Headline: Updated\n\n"
+            f"Time: "
+            f"{finished_at.strftime('%d %b %Y %I:%M %p')}"
+        )
+
+        send_telegram(message)
+
     except Exception as exc:
 
-        finished_at = datetime.now()
+        finished_at = datetime.now(IST)
+
+        last_run_status = "FAILED"
+        last_run_error = str(exc)
 
         print("=" * 60)
         print("AUTOMATION FAILED")
         print("=" * 60)
 
-        print("ERROR:", str(exc))
+        print(
+            "ERROR:",
+            str(exc)
+        )
 
         message = (
             "🤖 Naukri Automation\n\n"
             "❌ FAILED\n\n"
             f"Error: {str(exc)}\n\n"
-            f"Time: {finished_at.strftime('%d %b %Y %I:%M %p')}\n\n"
-            "Check Render logs for details."
+            f"Time: "
+            f"{finished_at.strftime('%d %b %Y %I:%M %p')}\n\n"
+            "Check Render logs."
         )
 
         send_telegram(message)
 
-        sys.exit(1)
+    finally:
+
+        automation_lock.release()
 
 
-if __name__ == "__main__":
-    main()
+# ============================================================
+# SCHEDULER
+# ============================================================
+
+scheduler = BackgroundScheduler(
+    timezone=IST
+)
+
+
+def start_scheduler():
+
+    scheduler.add_job(
+        run_automation,
+        trigger=CronTrigger(
+            hour=8,
+            minute=0,
+            timezone=IST
+        ),
+        id="naukri_daily_automation",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True
+    )
+
+    scheduler.start()
+
+    print(
+        "Scheduler started."
+    )
+
+    print(
+        "Naukri automation scheduled "
+        "for 8:00 AM IST every day."
+    )
+
+
+# ============================================================
+# API ENDPOINTS
+# ============================================================
+
+@app.get("/")
+def health_check():
+
+    return {
+        "service": "Naukri Profile Automation",
+        "status": "running",
+        "scheduled_time": "08:00 AM IST",
+        "last_run_status": last_run_status,
+        "last_run_time": (
+            last_run_time.isoformat()
+            if last_run_time
+            else None
+        ),
+        "last_run_error": last_run_error
+    }
+
+
+@app.get("/run")
+def manual_run():
+
+    if automation_lock.locked():
+
+        return {
+            "status": "already_running"
+        }
+
+    thread = threading.Thread(
+        target=run_automation,
+        daemon=True
+    )
+
+    thread.start()
+
+    return {
+        "status": "started",
+        "message": (
+            "Naukri automation started."
+        )
+    }
+
+
+# ============================================================
+# START SCHEDULER
+# ============================================================
+
+start_scheduler()
