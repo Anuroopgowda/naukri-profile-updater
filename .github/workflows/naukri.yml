@@ -45,6 +45,14 @@ jobs:
         run: |
           python app.py
 
+      - name: Upload debug screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: naukri-debug
+          path: naukri_login_debug.png
+          if-no-files-found: ignore
+
       # 6. Send Telegram notification if successful
       - name: Send success notification
         if: success()

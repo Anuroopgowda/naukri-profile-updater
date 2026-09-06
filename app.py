@@ -114,6 +114,17 @@ def login(page):
         wait_until="domcontentloaded"
     )
 
+    print("Current URL:", page.url)
+    print("Page title:", page.title())
+
+    page.screenshot(
+        path="naukri_login_debug.png",
+        full_page=True
+    )
+
+    print("Page HTML:")
+    print(page.locator("body").inner_text()[:5000])
+
     print("Clicking Login...")
 
     page.get_by_role(
