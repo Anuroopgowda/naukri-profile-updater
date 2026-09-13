@@ -34,7 +34,7 @@ class Constants:
     )
 
     NEW_HEADLINE = (
-        "1.5 Yrs Software Engineer | "
+        "1.9 Yrs Software Engineer | "
         "Python FastAPI Backend | "
         "REST APIs Microservices Docker | "
         "PostgreSQL AWS | LLM & Automation | "
